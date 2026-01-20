@@ -153,7 +153,7 @@ class Trainer(object):
             resume_file (file): the checkpoint file
         """
         resume_file = str(resume_file)
-        checkpoint = torch.load(resume_file)
+        checkpoint = torch.load(resume_file, weights_only=False)
         self.start_epoch = checkpoint['epoch'] + 1
         self.cur_step = checkpoint['cur_step']
         self.best_valid_score = checkpoint['best_valid_score']
@@ -319,7 +319,7 @@ class Trainer(object):
                 checkpoint_file = model_file
             else:
                 checkpoint_file = self.saved_model_file
-            checkpoint = torch.load(checkpoint_file)
+            checkpoint = torch.load(checkpoint_file, weights_only=False)
             self.model.load_state_dict(checkpoint['state_dict'])
             message_output = 'Loading model structure and parameters from {}'.format(checkpoint_file)
             self.logger.info(message_output)
