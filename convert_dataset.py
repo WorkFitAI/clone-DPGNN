@@ -4,6 +4,9 @@ Convert v5-sections CSV dataset to DPGNN format
 This script converts the WorkfitAI v5-sections dataset format to the format
 required by the original DPGNN implementation.
 
+IMPORTANT: DPGNN requires each user to have MULTIPLE job interactions with
+MIXED labels (both positives and negatives) for evaluation metrics to work.
+
 Required output files:
 - dataset/data.train_all - All training interactions
 - dataset/data.train_all_add - Training with additional edges
@@ -25,6 +28,7 @@ import os
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from collections import defaultdict
 import torch
 from transformers import AutoTokenizer, AutoModel
 
@@ -136,16 +140,14 @@ def main():
         for token in job_tokens:
             f.write(f"{token}\n")
 
-    # Process train data
+    # Process ALL train data (both positive and negative)
     print("\nProcessing training data...")
-    train_interactions = []
-    positive_interactions = []
-    user_add_interactions = []  # User initiated (all interactions from user perspective)
-    job_add_interactions = []   # Job initiated (we'll use same as user since no explicit direction)
+
+    # Group interactions by geek
+    geek_to_interactions = defaultdict(list)
 
     for idx, row in train_df.iterrows():
         geek_token = str(row['original_index'])
-        # Find job_token for this row
         jd_content = '|'.join([str(row.get(col, '')) for col in job_cols])
         jd_hash = hash(jd_content)
         job_token = job_hashes[jd_hash]
@@ -153,32 +155,66 @@ def main():
         label_str = str(row['label']).strip().lower()
         label = 1 if label_str == 'good fit' else 0
 
-        train_interactions.append((geek_token, job_token, label))
+        geek_to_interactions[geek_token].append((geek_token, job_token, label))
 
-        if label == 1:
-            positive_interactions.append((geek_token, job_token, label))
-            user_add_interactions.append((geek_token, job_token, label))
-            job_add_interactions.append((geek_token, job_token, label))
+    # Separate geeks with mixed labels (for proper evaluation)
+    geeks_with_mixed = []
+    geeks_without_mixed = []
 
-    # Split validation from training (using positive samples)
-    print("Creating validation split...")
-    np.random.seed(42)
-    n_valid = int(len(positive_interactions) * args.validation_split)
-    indices = np.random.permutation(len(positive_interactions))
-    valid_indices = set(indices[:n_valid])
+    for geek_token, interactions in geek_to_interactions.items():
+        labels = [inter[2] for inter in interactions]
+        has_positive = any(l == 1 for l in labels)
+        has_negative = any(l == 0 for l in labels)
 
-    valid_interactions = []
-    train_final = []
-
-    for i, inter in enumerate(positive_interactions):
-        if i in valid_indices:
-            valid_interactions.append(inter)
+        if has_positive and has_negative:
+            geeks_with_mixed.append(geek_token)
         else:
-            train_final.append(inter)
+            geeks_without_mixed.append(geek_token)
 
-    # Process test data
+    print(f"Geeks with mixed labels: {len(geeks_with_mixed)}")
+    print(f"Geeks without mixed labels: {len(geeks_without_mixed)}")
+
+    # For training, use only positive interactions (BPR loss)
+    train_positive = []
+    for geek_token, interactions in geek_to_interactions.items():
+        for inter in interactions:
+            if inter[2] == 1:  # Only positives for training
+                train_positive.append(inter)
+
+    # Split validation from geeks with mixed labels
+    print("Creating validation split from geeks with mixed labels...")
+    np.random.seed(42)
+
+    # Use geeks with mixed labels for validation (so evaluation works)
+    n_valid_geeks = max(1, int(len(geeks_with_mixed) * args.validation_split))
+    np.random.shuffle(geeks_with_mixed)
+    valid_geeks = set(geeks_with_mixed[:n_valid_geeks])
+    train_geeks = set(geeks_with_mixed[n_valid_geeks:]) | set(geeks_without_mixed)
+
+    # Build train and valid sets
+    train_final = []
+    valid_interactions = []
+
+    for geek_token, interactions in geek_to_interactions.items():
+        if geek_token in valid_geeks:
+            # Include ALL interactions (positive AND negative) for evaluation
+            valid_interactions.extend(interactions)
+        else:
+            # For training, only positives
+            for inter in interactions:
+                if inter[2] == 1:
+                    train_final.append(inter)
+
+    # For user_add and job_add, use all positive interactions
+    user_add_interactions = train_positive.copy()
+    job_add_interactions = train_positive.copy()
+
+    # Process test data - include ALL interactions (positive and negative)
     print("Processing test data...")
-    test_interactions = []
+
+    # Group test by geek
+    test_geek_to_interactions = defaultdict(list)
+
     for idx, row in test_df.iterrows():
         geek_token = str(row['original_index'])
         jd_content = '|'.join([str(row.get(col, '')) for col in job_cols])
@@ -187,7 +223,48 @@ def main():
 
         label_str = str(row['label']).strip().lower()
         label = 1 if label_str == 'good fit' else 0
-        test_interactions.append((geek_token, job_token, label))
+        test_geek_to_interactions[geek_token].append((geek_token, job_token, label))
+
+    # Filter test geeks to only those with mixed labels
+    test_interactions = []
+    test_geeks_kept = 0
+    test_geeks_filtered = 0
+
+    for geek_token, interactions in test_geek_to_interactions.items():
+        labels = [inter[2] for inter in interactions]
+        has_positive = any(l == 1 for l in labels)
+        has_negative = any(l == 0 for l in labels)
+
+        if has_positive and has_negative:
+            test_interactions.extend(interactions)
+            test_geeks_kept += 1
+        else:
+            test_geeks_filtered += 1
+
+    print(f"Test geeks kept (mixed labels): {test_geeks_kept}")
+    print(f"Test geeks filtered (single label type): {test_geeks_filtered}")
+
+    # If not enough mixed-label test samples, add negative sampling
+    if test_geeks_kept == 0:
+        print("\nWARNING: No test geeks with mixed labels. Adding negative samples...")
+        all_job_tokens = list(job_tokens)
+
+        for geek_token, interactions in test_geek_to_interactions.items():
+            # Get existing jobs for this geek
+            existing_jobs = set(inter[1] for inter in interactions)
+
+            # Add interactions
+            test_interactions.extend(interactions)
+
+            # Sample negative jobs
+            n_negatives = min(5, len(all_job_tokens) - len(existing_jobs))
+            if n_negatives > 0:
+                available_jobs = [j for j in all_job_tokens if j not in existing_jobs]
+                neg_jobs = np.random.choice(available_jobs, size=n_negatives, replace=False)
+                for neg_job in neg_jobs:
+                    test_interactions.append((geek_token, neg_job, 0))
+
+        print(f"Test interactions after negative sampling: {len(test_interactions)}")
 
     # Write interaction files
     print("\nWriting interaction files...")
@@ -225,7 +302,7 @@ def main():
     )
     print(f"  data.job_add: {len(job_add_interactions)} samples")
 
-    # Validation sets (same for both perspectives in our case)
+    # Validation sets (with BOTH positive and negative samples)
     write_interactions(
         os.path.join(args.output_dir, 'data.valid_g'),
         valid_interactions
@@ -236,7 +313,7 @@ def main():
     )
     print(f"  data.valid_g/valid_j: {len(valid_interactions)} samples")
 
-    # Test sets (same for both perspectives)
+    # Test sets (with BOTH positive and negative samples)
     write_interactions(
         os.path.join(args.output_dir, 'data.test_g'),
         test_interactions
@@ -295,9 +372,9 @@ def main():
     print(f"\nOutput directory: {args.output_dir}")
     print(f"Unique geeks: {len(geek_tokens)}")
     print(f"Unique jobs: {len(job_tokens)}")
-    print(f"Training interactions: {len(train_final)}")
-    print(f"Validation interactions: {len(valid_interactions)}")
-    print(f"Test interactions: {len(test_interactions)}")
+    print(f"Training interactions (positives): {len(train_final)}")
+    print(f"Validation interactions (mixed): {len(valid_interactions)}")
+    print(f"Test interactions (mixed): {len(test_interactions)}")
 
     print("\nGenerated files:")
     for f in sorted(os.listdir(args.output_dir)):
