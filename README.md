@@ -9,12 +9,40 @@ We propose a dual-perspective graph representation learning approach to model di
 
 ![markdown picture](./asset/model.jpg)
 
+## Adaptation for v5-sections Dataset
+
+This clone has been adapted to work with the WorkfitAI v5-sections dataset format. The original code is unchanged - only a data conversion script has been added.
+
+### Quick Start with v5-sections
+
+```bash
+# Step 1: Install dependencies
+pip install -r requirements.txt
+
+# Step 2: Convert v5-sections CSV to DPGNN format
+python convert_dataset.py --train_csv train.csv --test_csv test.csv
+
+# Step 3: Train the model
+python main.py
+```
+
+### What the converter does:
+- Converts `train.csv` and `test.csv` to DPGNN's expected format
+- Creates unique geek (resume) and job tokens
+- Generates BERT embeddings using bert-base-uncased
+- Creates train/valid/test splits in the required format
+
 ## Requirements
 
 ```
-torch==1.10.0+cu113
-torch_geometric==2.0.2
-cudatoolkit==11.3.1
+torch>=1.10.0
+torch_geometric>=2.0.2
+transformers>=4.20.0
+```
+
+Install all requirements:
+```bash
+pip install -r requirements.txt
 ```
 
 ## Dataset

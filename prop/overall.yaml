@@ -1,12 +1,12 @@
 # Device
 use_gpu: True
-gpu_id: 1
+gpu_id: 0
 
 # Training
 learner: Adam
-epochs: 3000 # 300
+epochs: 50  # Reduced for v5-sections dataset
 eval_step: 1
-stopping_step: 5
+stopping_step: 10
 clip_grad_norm: ~
 
 # Evaluation
@@ -25,5 +25,5 @@ loss_decimal_place: 4
 metric_decimal_place: 4
 
 # Repreducibility
-seed: 2020
+seed: 42
 reproducibility: True

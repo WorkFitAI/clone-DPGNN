@@ -12,7 +12,7 @@ BERT_output_size: 32
 # Training
 learning_rate: 0.001
 
-# General
-train_batch_size: 4096
-eval_batch_size: 4096
+# General - adjusted for v5-sections dataset size
+train_batch_size: 256
+eval_batch_size: 256
 
