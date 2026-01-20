@@ -44,6 +44,8 @@ class Trainer(object):
         self.cur_step = 0
         self.best_valid_score = -1
         self.best_valid_result = None
+        self.best_valid_result_g = None
+        self.best_valid_result_j = None
         self.train_loss_dict = dict()
         self.optimizer = self._build_optimizer()
         self.evaluator = Evaluator(config)
